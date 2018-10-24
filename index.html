@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vue Color Chooser</title>
+
+    <!--<script src="https://unpkg.com/vue"></script>-->
+    <!--<script src="https://cdn.jsdelivr.net/npm/vue@2.5.17/dist/vue.min.js"></script>-->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.5.17/dist/vue.js"></script>
+</head>
+<body>
+
+<div id="colorChooser">
+    <h1>Vue Color Object Chooser {{vueRelease}}</h1>
+
+    <!--BASE COLOR CHOOSER:-->
+    <b>Click to lock Base Color:</b>
+    <span :style="'color: white; background-color: rgb(' + baseColor.red + ','
+                                                        + baseColor.grn + ','
+                                                        + baseColor.blu + ');'">
+        {{baseColor.red}} {{baseColor.grn}} {{baseColor.blu}}</span>
+
+    <div id="baseColors">
+        <div class="base-el"
+             v-for="props in baseProps"
+             :class="{selected:props === baseColor}"
+             v-on:mouseover="baseHover(props)"
+             v-on:click="baseClick(props)"
+             :style="'color: white; background-color: rgb(' + props.red + ','
+                                                            + props.grn + ','
+                                                            + props.blu + ');'">
+            R:{{props.red}}<br>G:{{props.grn}}<br>B:{{props.blu}}
+        </div>
+    </div>
+    <br>
+
+    <!--FINAL COLOR CHOOSER:-->
+    <b>Click to lock Final Color:</b>
+    <span :style="'color: ' + fgColor(readoutColor.red, readoutColor.grn, readoutColor.blu) +
+                  '; background-color: rgb(' + readoutColor.red + ','
+                                                         + readoutColor.grn + ','
+                                                         + readoutColor.blu + ');'">
+        {{readoutColor.red}} {{readoutColor.grn}} {{readoutColor.blu}}</span>
+    <br>
+    <div id="finalColors">
+        <div class="final-el"
+             v-for="props in finalProps"
+             :class="{selected:props === finalColor}"
+             v-on:mouseover="finalHover(props)"
+             v-on:click="finalClick(props)"
+             :style="'color: ' + fgColor(props.red, props.grn, props.blu)
+             + '; background-color: rgb(' + props.red + ',' + props.grn + ',' + props.blu + ');'"
+             v-html="'R:' + props.red + '<br>G:' + props.grn + '<br>B:' + props.blu">
+        </div>
+    </div>
+
+    <!--FINAL READOUT AND CLIPBOARD-COPY BUTTONS:-->
+    <span id="readout-grid">
+    <span class="info"><b>Final<br>Color:</b></span>
+    <span :style="'color: ' + fgColor(readoutColor.red, readoutColor.grn, readoutColor.blu)
+                    + '; padding: 12px; border: 3px solid gray; background-color: rgb('
+                    + readoutColor.red + ',' + readoutColor.grn + ',' + readoutColor.blu + ');'"
+          v-html="'R:' + readoutColor.red + '<br>G:' + readoutColor.grn + '<br>B:' + readoutColor.blu">
+    </span>
+    <span></span>
+    <span></span>
+    <span></span>
+    <button v-on:click="copyToClip(readoutColor.red,',',readoutColor.grn,',',readoutColor.blu)">
+        Copy <b>{{readoutColor.red}},{{readoutColor.grn}},{{readoutColor.blu}}</b> to clipboard</button>
+    <span class="info" v-if="clipCopied"><b>{{clipCopied}}</b> copied to clipboard.</span>
+    <span class="info" v-else><br><br><br></span>
+    <button v-on:click="copyToClip('#',readoutHex.red,readoutHex.grn,readoutHex.blu)">
+        Copy <b>#{{readoutHex.red}}{{readoutHex.grn}}{{readoutHex.blu}}</b> to clipboard</button>
+    <span class=info v-if="framesPerSec">Average frames/sec:
+        <b>{{framesPerSec}}@{{finalCols}}x{{finalCols}}</b></span>
+    <span class=info v-else><br><br><br></span>
+        <button v-on:click="toggleDemo()">
+        Demo {{demoButton}}</button>
+    </span>
+</div>
+
+<script>
+    "use strict";
+    const release = "1.0";          // "Semantic" program version for end users
+    document.title = "Vue Color Object Chooser " + release;
+
+    // Toggles:
+    let baseLock = false;
+    let finalLock = false;
+
+    // Demo mode:
+    let demoSecs = 0;   // For frames/sec readout
+    let frameCount = 0;
+
+    let doDemo = false;
+    let demoRefreshing = false;
+    let demoBaseArray = [];  // Copy of baseArray For "demo" mode operation
+    let demoSpeed = 10; // ms delay during demo cycles
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('demo')) {
+        if (urlParams.get('demo') === 'true')
+            doDemo = true;
+    }
+
+    ///// Set up responsive sizing of all elements by executing our CSS via JavaScript:
+    // todo: unstyled page flashes at startup.
+    const gridCellSize = 45;
+    const bodyMargin = 40;
+    let baseColSpec;
+    let finalColSpec;
+
+    setMySize();
+    window.addEventListener('resize', setMySize);
+
+    function setMySize() {
+        const myWidth = document.documentElement.clientWidth - bodyMargin * 2; // account for margins
+        const myHeight = document.documentElement.clientHeight - bodyMargin * 2; // margins + other elements
+
+        // "final" grid dimensions:
+        const finalWidth = myWidth - 145;   // Allow for readout grid
+        const finalHeight = myHeight - 185; // Allow for base grid
+        const finalMinDim = finalWidth < finalHeight ? finalWidth : finalHeight;
+
+        baseColSpec = Math.round(myWidth / gridCellSize);
+        finalColSpec = Math.round(finalMinDim / gridCellSize);
+        if (finalColSpec < 2) finalColSpec = 2;
+        demoSecs = 0;
+        frameCount = 0;
+
+        /// Write style sheet here so we can share its variables with JavaScript:
+        let styleEl = document.getElementById("ccStyles"); // Avoid appending multiple <style>s
+        if (styleEl)
+            styleEl.parentNode.removeChild(styleEl);
+        const ccStyleSheet = document.createElement('style');
+        ccStyleSheet.id = "ccStyles";
+        ccStyleSheet.innerHTML = `
+:root {
+    font-family: sans-serif;
+    --bgcolor: lightgray;
+    background-color: var(--bgcolor);
+}
+
+body {
+    margin: ${bodyMargin}px;
+}
+
+h1 {
+    text-align: center;
+}
+
+#baseColors {
+    display: grid;
+    width: fit-content;
+    grid-template-columns: repeat(${baseColSpec}, ${gridCellSize}px);
+}
+
+#finalColors {
+    display: inline-grid;
+    width: fit-content;
+    grid-template-columns: repeat(${finalColSpec}, ${gridCellSize}px); /* best w/odd number */
+}
+
+#readout-grid {
+    display: inline-grid;
+    grid-template-columns: ${gridCellSize * 2}px ${gridCellSize * 2}px;
+    max-width: ${gridCellSize * 2}px; /* scroll screen instead of wrapping beneath elements to my left */
+}
+
+.base-el, .final-el {
+    border-color: var(--bgcolor);
+    border-style: solid;
+    border-width: 2px;
+}
+
+.base-el, .final-el, .selected {
+    font-size: ${gridCellSize / 4}px;
+    line-height: ${gridCellSize / 4}px;
+    /*border-radius: ${gridCellSize / 8}px; causes lockups (performance) */
+    height: ${gridCellSize / 1.1}px;
+    display: block;
+    cursor: pointer;
+    padding-left: ${gridCellSize / 20}px;
+    padding-top: ${gridCellSize / 20}px;
+}
+
+.info {
+    font-size: ${gridCellSize / 3.5}px;
+    text-align: right;
+    padding: 6px;
+}
+
+@keyframes blink {
+    0% {
+        border: 2px inset white;
+    }
+    100% {
+        border: 2px outset white;
+    }
+}
+
+/* Highlight a selected cell */
+.selected {
+    animation: blink .6s step-start infinite alternate;
+    // animation-timing-function: ease-in-out;
+    animation-timing-function: ease;
+    /*todo: causes lockup w/Chrome ("mousehandler timeout?") */
+    /*transform: skewY(-20deg);*/
+}
+
+button {
+    height: ${gridCellSize * 2}px;
+    width: ${gridCellSize * 2}px;
+    font-size: ${gridCellSize / 3.5}px;
+    line-height: ${gridCellSize / 3.5}px;
+    align-self: center;
+    cursor: pointer;
+    border: 3px solid gray;
+}
+
+button:hover,
+button:focus {
+    background: white;
+}
+
+button:active {
+  transform: translate(4px, 4px);
+}
+
+`;
+        document.head.appendChild(ccStyleSheet);
+    }
+
+    new Vue({
+        el: '#colorChooser',
+        mounted() {
+            window.addEventListener('resize', this.onResize);
+            if (doDemo) {
+                this.demoButton = "OFF";
+                this.clockDemo();
+                this.runDemo();  // Kick off the demo
+            } else {
+                this.demoButton = "ON";
+            }
+        },
+        data: {
+            vueRelease: release,
+            // Initial user choice:
+            baseColor: {red: 127, grn: 127, blu: 127},
+            // Final user choice:
+            finalColor: {red: 127, grn: 127, blu: 127},
+            // Readouts:
+            readoutColor: {red: 127, grn: 127, blu: 127},
+            readoutHex: {red: "7f", grn: "7f", blu: "7f"},
+            // Selections (control CSS highlighting):
+            baseSelection: undefined,
+            finalSelection: undefined,
+            // Used in "copy to clipboard" logic:
+            clipCopied: undefined,
+            demoButton: undefined,
+
+            // Stateful in case of resize event:
+            baseCols: baseColSpec,
+            finalCols: finalColSpec,
+
+            finalArray: [], // stateful so we can watch it during demo mode
+
+            framesPerSec: undefined,
+        },
+        watch: {
+            // Change to finalArray triggers change to final selection during demo:
+            finalArray() {
+                if (doDemo) {
+                    // console.log(`finalArray watched.`);
+                    let nextFinalEl;
+                    const finalCellCt = this.finalCols * this.finalCols;
+
+                    do
+                        nextFinalEl = this.finalArray[Math.trunc(Math.random() * finalCellCt)];
+                    while (nextFinalEl === this.finalColor); // Force new random location
+
+                    // todo: D.R.Y.:
+                    this.readoutColor = nextFinalEl;
+                    this.finalColor = nextFinalEl;
+                    this.readoutHex.red = nextFinalEl.red.toString(16).padStart(2, "0");
+                    this.readoutHex.grn = nextFinalEl.grn.toString(16).padStart(2, "0");
+                    this.readoutHex.blu = nextFinalEl.blu.toString(16).padStart(2, "0");
+                    frameCount++;
+                }
+            },
+            // Change to finalColor triggers change to finalArray during demo:
+            finalColor() {
+                doDemo && this.runDemo();
+            }
+        },
+
+        // The "base" grid contains a fixed set of initial colors to choose from.
+        // The "final" grid changes dynamically to colors adjacent to that of the
+        // currently selected base grid cell.  So initialize the base grid with a
+        // spectrum of colors, and initialize the final grid with the coordinates
+        // needed to calculate its colors at finalCell(), below.
+        //
+        computed: {
+            ///////////// CALCULATE BASE GRID COLORS and IDs:
+            baseProps: function () {
+                let baseArray = [];
+                let red = 255;
+                let grn = 255;
+                let blu = 255;
+
+                // Base rainbow grid.  Math derived from https://krazydad.com/tutorials/makecolors.php:
+                const sinFreq = 6 / this.baseCols;
+                const greenPhase = 2 * Math.PI / 3;
+                const bluePhase = 4 * Math.PI / 3;
+                const sineWidth = 127;
+                const sineCtr = 128;
+                for (let j = 0; j < this.baseCols - 1; ++j) {
+                    red = Math.round(Math.sin(sinFreq * j + 0) * sineWidth + sineCtr);
+                    grn = Math.round(Math.sin(sinFreq * j + greenPhase) * sineWidth + sineCtr);
+                    blu = Math.round(Math.sin(sinFreq * j + bluePhase) * sineWidth + sineCtr);
+                    baseArray.push({red, grn, blu}); // NB: pushing an OBJECT
+                }
+                // Add gray square:
+                red = grn = blu = 127;
+                baseArray.push({red, grn, blu});
+                demoBaseArray = baseArray;
+                return baseArray;
+            },
+
+            ///////////// CALCULATE FINAL COLOR GRID CELL COLORS & IDs:
+            finalProps: function () {
+                // Derive grid size from CSS:
+                this.finalArray = [];
+                let red;
+                let grn;
+                let blu;
+                let xOffset;
+                let yOffset;
+                const baseRed = +this.baseColor.red;
+                const baseGrn = +this.baseColor.grn;
+                const baseBlu = +this.baseColor.blu;
+
+                let xSpread = Math.round(136 / this.finalCols);
+                let ySpread = Math.round(154 / this.finalCols);
+                let periphCols = Math.trunc(this.finalCols / 2);
+                // red/grn/blu code adapted from Justin Meyer:
+                for (let c = 0, id = 0; c < this.finalCols; c++) {
+                    for (let r = 0; r < this.finalCols; id++, r++) {
+                        xOffset = periphCols - c;    // How far am I from grid center?
+                        yOffset = periphCols - r;
+                        // Purely empirical way of getting a useful range:
+                        red = baseRed + xOffset * xSpread + yOffset * ySpread;
+                        grn = baseGrn + xOffset * xSpread + yOffset * ySpread;
+                        blu = baseBlu + xOffset * xSpread + yOffset * ySpread;
+                        red = red > 255 ? 255 : red < 1 ? 0 : red;
+                        grn = grn > 255 ? 255 : grn < 1 ? 0 : grn;
+                        blu = blu > 255 ? 255 : blu < 1 ? 0 : blu;
+                        this.finalArray.push({red, grn, blu});
+                    }
+                }
+                return this.finalArray;
+            }
+        },
+        methods: {
+            runDemo() {
+                // console.log(`runDemo called.`);
+                if (demoRefreshing) return;
+                demoRefreshing = true;
+
+                let nextBaseEl;
+
+                do
+                    nextBaseEl = demoBaseArray[Math.trunc(Math.random() * baseColSpec)];
+                while (nextBaseEl === this.baseColor); // Force new random location
+
+                setTimeout(() => {
+                    if (doDemo) {   // Test flag here since it may have been set during timeout
+                        this.baseColor = nextBaseEl;
+                    }
+                    demoRefreshing = false;
+                }, demoSpeed);
+            },
+            clockDemo() {
+                setTimeout(() => {
+                    if (doDemo) {
+                        this.framesPerSec = (frameCount / ++demoSecs).toFixed(2); // Seconds we have been running this demo
+                        this.clockDemo();
+                    }
+                }, 1000);
+            },
+            // Our window was resized, so trigger a render:
+            onResize(event) {
+                this.baseCols = baseColSpec;
+                this.finalCols = finalColSpec;
+            },
+            // Set selection to id and base color from background-color of a hovered/clicked cell:
+            setBaseRGB(color) {
+                if (doDemo) return;
+                this.baseColor = color;
+                this.finalSelection = undefined;
+                finalLock = false;
+            },
+            baseHover(color) {
+                if (!baseLock) this.setBaseRGB(color);
+            },
+            baseClick(color) {
+                baseLock = !baseLock;
+                this.setBaseRGB(color);
+            },
+            // Set selection to id and final color from background-color of a hovered/clicked cell:
+            setFinalRGB(color) {
+                if (doDemo) return;
+                this.readoutColor = color;
+                this.finalColor = color;
+                this.readoutHex.red = color.red.toString(16).padStart(2, "0");
+                this.readoutHex.grn = color.grn.toString(16).padStart(2, "0");
+                this.readoutHex.blu = color.blu.toString(16).padStart(2, "0");
+            },
+            finalHover(color) {
+                if (!finalLock) this.setFinalRGB(color);
+            },
+            finalClick(color) {
+                finalLock = !finalLock;
+                this.setFinalRGB(color);
+            },
+            fgColor(red, grn, blu) {
+                // if (+red + +grn + +blu > 400) {  // '+' coerces strings to numbers
+                if (+red + +grn * 1.5 + +blu * .5 > 400) {  // '+' coerces strings to numbers
+                    return "black";
+                }
+                else
+                    return "white";
+            },
+            // Copy argument(s) to end user system's clipboard:
+            copyToClip() {
+                let toCopy = "";
+                for (let i = 0; i < arguments.length; i++) {
+                    toCopy += arguments[i];
+                }
+                // Note: this has the confusing side-effect of de-focusing any active button:
+                let textArea = document.createElement("textarea");
+                textArea.value = toCopy;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand("Copy");
+                textArea.remove();
+                this.clipCopied = `${toCopy}`;
+            },
+            toggleDemo() {
+                doDemo = !doDemo;
+                if (doDemo) {
+                    demoRefreshing = false;
+                    this.demoButton = "OFF";
+                    this.clockDemo();
+                    this.runDemo();     // Kick off demo
+                } else {
+                    this.demoButton = "ON";
+                    this.frameCount = 0;
+                    this.demoSecs = 0;
+                }
+            },
+        }
+    });
+</script>
+</body>
+</html>
